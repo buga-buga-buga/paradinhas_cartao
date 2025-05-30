@@ -1,0 +1,125 @@
+from Crypto.Cipher import DES
+import binascii
+import re
+
+# Função para verificar o dígito verificador usando o algoritmo de Luhn - Mod 10
+def luhn_check(card_number):
+    digits = [int(d) for d in card_number]
+    checksum = 0
+    parity = len(digits) % 2
+    for i, d in enumerate(digits):
+        if i % 2 == parity:
+            d *= 2
+            if d > 9:
+                d -= 9
+        checksum += d
+    return checksum % 10 == 0
+
+# Função para preencher uma string à direita com zeros até atingir o tamanho desejado
+def pad_right(s, length, pad_char='0'):
+    return s.ljust(length, pad_char)
+
+# Função para encriptar dados usando o algoritmo DES (Data Encryption Standard)
+# DES é um algoritmo clássico de criptografia simétrica, usa a mesma chave para 
+# encriptar e decriptar.
+def des_encrypt(key, data):
+    cipher = DES.new(key, DES.MODE_ECB)
+    return cipher.encrypt(data)
+
+# Função para decriptar dados usando DES
+def des_decrypt(key, data):
+    cipher = DES.new(key, DES.MODE_ECB)
+    return cipher.decrypt(data)
+
+# Função para converter uma string hexadecimal em bytes
+def hexstr_to_bytes(hexstr):
+    return binascii.unhexlify(hexstr)
+
+# Função principal para gerar o CVV (Card Verification Value) / CVC (Card Verification Code)
+# Entre outros, é o código de segurança de 3 dígitos impresso no verso do cartão
+def generate_cvv(pan, expiry, service_code, key_hex):
+    # Divide a chave em duas partes de 8 bytes (16 caracteres hexadecimais cada)
+    key_a = hexstr_to_bytes(key_hex[:16])
+    key_b = hexstr_to_bytes(key_hex[16:32])
+
+    # Concatena o número do cartão (PAN), validade (AAMM) e código de serviço
+    data = pan + expiry + service_code
+    # Preenche com zeros à direita até 32 caracteres (16 bytes)
+    data = pad_right(data, 32, '0')  
+    
+    # Divide em duas metades de 16 caracteres (8 bytes cada)
+    left = data[:16]
+    right = data[16:]
+    
+    # Converte as metades para bytes (cada par de caracteres hex representa 1 byte)
+    left_bytes = binascii.unhexlify(left)
+    right_bytes = binascii.unhexlify(right)
+    
+    # Criptografa a metade esquerda com a primeira parte da chave (key_a)
+    encrypted_left = des_encrypt(key_a, left_bytes)
+
+    # Realiza uma operação XOR entre o resultado criptografado e a metade direita
+    xor_result = bytes([a ^ b for a, b in zip(encrypted_left, right_bytes)])
+    
+    # Criptografa o resultado do XOR novamente com key_a
+    TDES_passo1 = des_encrypt(key_a, xor_result)
+    
+    # Decriptografa o resultado com key_b (processo de "Triple DES": Encrypt-Decrypt-Encrypt)
+    TDES_passo2 = des_decrypt(key_b, TDES_passo1)
+
+    # Criptografa novamente com key_a
+    TDES_passo3 = des_encrypt(key_a, TDES_passo2)
+
+    # Extrai apenas os dígitos do resultado hexadecimal
+    digits = re.sub(r'\D', '', TDES_passo3.hex())
+
+    # Retorna os 3 primeiros dígitos como CVV
+    return digits[:3]  
+
+# =======================
+# DADOS DE ENTRADA
+# =======================
+
+# Chave de criptografia (32 caracteres hexadecimais, ou seja, 16 bytes)
+key_hex = "0123456789012345ABCDEF0123456789"
+# Número do cartão (PAN - Primary Account Number)
+pan = "5067240000000019"
+# Data de validade no formato AAMM (Ano e Mês)
+expiry = "2512"       
+# "Código de serviço" (originalmente usado para o CVV da trilha)
+service_code = "999"  
+
+# =======================
+# VALIDAÇÕES
+# =======================
+
+# Valida o número do cartão usando o algoritmo de Luhn
+if not luhn_check(pan):
+    raise ValueError("Número do cartão inválido (verifique o dígito verificador).")
+# Verifica se o PAN tem 16 dígitos numéricos
+if len(pan) != 16 or not pan.isdigit():
+    raise ValueError("O PAN deve ter 16 dígitos numéricos.")
+# Verifica se a validade tem 4 dígitos numéricos (AAMM)
+if len(expiry) != 4 or not expiry.isdigit():
+    raise ValueError("A data de validade deve ter 4 dígitos numéricos (YYMM).")
+# Verifica se o código de serviço tem 3 dígitos numéricos
+if len(service_code) != 3 or not service_code.isdigit():
+    raise ValueError("O código de serviço deve ter 3 dígitos numéricos.")
+# Verifica se a chave tem 32 caracteres hexadecimais
+if len(key_hex) != 32 or not all(c in '0123456789ABCDEF' for c in key_hex.upper()):
+    raise ValueError("A chave deve ter 32 caracteres hexadecimais (16 bytes).")
+# Verifica se a chave contém apenas caracteres alfanuméricos
+if not key_hex.isalnum():
+    raise ValueError("A chave deve conter apenas caracteres alfanuméricos (hexadecimais).")
+# Verifica se a chave está em letras maiúsculas
+if not key_hex.isupper():
+    raise ValueError("A chave deve estar em letras maiúsculas (hexadecimais).")
+
+# =======================
+# GERAÇÃO DO CVV
+# =======================
+
+# Se todos os dados de entrada forem válidos, gera o CVV
+else:
+    cvv = generate_cvv(pan, expiry, service_code, key_hex)
+    print("CVV gerado :", cvv)
